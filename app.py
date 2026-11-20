@@ -45,60 +45,134 @@ def parse_date(text):
     try: return format_datetime(datetime(int(m[3]),months[m[2]],int(m[1]),17,tzinfo=timezone.utc)) if m else format_datetime(datetime.now(timezone.utc))
     except: return format_datetime(datetime.now(timezone.utc))
 
-async def extract_episode(page, url):
-    candidates = []
-    diagnostics = []
+def add_candidate(
+    media_url,
+    content_type="",
+    source="network"
+):
+    if not media_url:
+        return
 
-    def add_candidate(audio_url, content_type="", source="network"):
-        if not audio_url:
-            return
+    media_url = (
+        media_url
+        .replace("\\u002F", "/")
+        .replace("\\/", "/")
+        .replace("&amp;", "&")
+    )
 
-        audio_url = audio_url.replace("\\u002F", "/")
-        audio_url = audio_url.replace("\\/", "/")
-        content_type = (content_type or "").lower()
+    lower_url = media_url.lower()
+    content_type = (content_type or "").lower()
 
-        is_audio = (
-            content_type.startswith("audio/")
-            or "mpegurl" in content_type
-            or "application/vnd.apple.mpegurl" in content_type
-            or "application/x-mpegurl" in content_type
-            or re.search(
-                r"\.(mp3|m4a|aac|m3u8|mp4)(?:\?|$)",
-                audio_url,
-                re.I
-            )
-            or any(
-                marker in audio_url.lower()
-                for marker in [
-                    "/media/",
-                    "/audio/",
-                    "/stream/",
-                    "manifest",
-                    "playlist",
-                    "master.m3u8"
-                ]
-            )
+    # Rejeter explicitement les images et autres ressources non audio
+    rejected_extensions = (
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".avif",
+        ".css",
+        ".js",
+        ".woff",
+        ".woff2",
+        ".ttf"
+    )
+
+    image_content_types = (
+        "image/",
+        "text/css",
+        "application/javascript",
+        "text/javascript",
+        "font/"
+    )
+
+    if any(
+        extension in lower_url.split("?")[0]
+        for extension in rejected_extensions
+    ):
+        return
+
+    if content_type.startswith(image_content_types):
+        return
+
+    # Le domaine images.radio-canada.ca ne doit jamais être
+    # utilisé comme fichier audio.
+    if "images.radio-canada.ca" in lower_url:
+        return
+
+    direct_audio = bool(
+        re.search(
+            r"\.(mp3|m4a|aac|oga|ogg|opus|wav)"
+            r"(?:\?|$)",
+            media_url,
+            re.I
+        )
+    )
+
+    hls_audio = bool(
+        re.search(
+            r"\.m3u8(?:\?|$)",
+            media_url,
+            re.I
+        )
+    )
+
+    audio_content_type = (
+        content_type.startswith("audio/")
+        or "mpegurl" in content_type
+        or "application/vnd.apple.mpegurl"
+            in content_type
+        or "application/x-mpegurl"
+            in content_type
+    )
+
+    media_request = (
+        source.startswith("request:media")
+        and any(
+            marker in lower_url
+            for marker in [
+                "services.radio-canada.ca",
+                "rcavlive.akamaized.net",
+                "akamaized.net",
+                "akamaihd.net",
+                "manifest",
+                "playlist"
+            ]
+        )
+    )
+
+    accepted = (
+        direct_audio
+        or hls_audio
+        or audio_content_type
+        or media_request
+    )
+
+    diagnostics.append({
+        "url": media_url,
+        "contentType": content_type,
+        "source": source,
+        "accepted": accepted
+    })
+
+    if accepted and media_url not in candidates:
+        candidates.append(media_url)
+
+async def handle_response(response):
+    try:
+        content_type = response.headers.get(
+            "content-type",
+            ""
         )
 
-        diagnostics.append({
-            "url": audio_url,
-            "contentType": content_type,
-            "source": source,
-            "accepted": bool(is_audio)
-        })
-
-        if is_audio and audio_url not in candidates:
-            candidates.append(audio_url)
-
-    async def handle_response(response):
-        try:
-            add_candidate(
-                response.url,
-                response.headers.get("content-type", ""),
-                "response"
-            )
-        except Exception:
-            pass
+        add_candidate(
+            response.url,
+            content_type,
+            "response"
+        )
+    except Exception:
+        pass
 
     async def handle_request(request):
         try:
