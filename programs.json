@@ -1,0 +1,44 @@
+[
+  {
+    "slug": "la-journee",
+    "title": "La journée (est encore jeune)",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/9887/la-journee-est-encore-jeune",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "l-histoire",
+    "title": "L’histoire (est encore jeune)",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/14021/lhistoire-est-encore-jeune",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "moteur",
+    "title": "Moteur de recherche",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/6056/moteur-de-recherche",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "jaquette",
+    "title": "Olivier Niquet 24/7 (en jaquette)",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/12095/olivier-niquet-24-7-en-jaquette",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "rad",
+    "title": "Le balado de Rad",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/11225/rad",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "decrypteurs",
+    "title": "Décrypteurs : le balado",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/11099/decrypteurs",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+ {
+    "slug": "derives",
+    "title": "Dérives",
+    "url": "https://ici.radio-canada.ca/ohdio/balados/7777/science-croyances-comprendre-encadrement-loi",
+    "description": "Flux RSS personnel généré depuis OHdio."
+  }
+]
