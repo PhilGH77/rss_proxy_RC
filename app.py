@@ -134,7 +134,7 @@ async def extract_episode(page, url):
     await page.goto(
         url,
         wait_until="networkidle",
-        timeout=90000
+        timeout=360000
     )
 
     # Accepter les fenêtres de consentement éventuelles
