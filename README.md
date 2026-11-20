@@ -1,36 +1,41 @@
-# Convertisseur OHdio multi-émissions
+# RSS Proxy RC — reconstruction robuste
 
-Une seule instance produit un flux RSS séparé pour chaque émission déclarée dans `programs.json`.
+Cette version conserve `programs.json` et remplace le reste.
 
-## Ajouter une émission
-Copier l'URL de sa page OHdio et ajouter un objet dans `programs.json` :
+## Fichiers à remplacer
+Gardez votre `programs.json` actuel. Remplacez `app.py`, `requirements.txt`, `Dockerfile`, `railway.json`, `.dockerignore`.
 
-```json
-{
-  "slug": "nom-court-unique",
-  "title": "Titre affiché",
-  "url": "https://ici.radio-canada.ca/ohdio/balados/1234/nom-de-lemission",
-  "description": "Description facultative"
-}
-```
-
-Le `slug` devient l'adresse du flux : `/feed/nom-court-unique`.
-
-## Déploiement Railway
-Déployer les cinq fichiers à la racine du dépôt. Variables recommandées :
-
+## Variables Railway
 ```text
-PUBLIC_URL=https://votre-service.up.railway.app
-MAX_EPISODES=25
-CACHE_SECONDS=1800
+PUBLIC_URL=https://rssproxyrc-production.up.railway.app
+MAX_EPISODES=5
+CACHE_SECONDS=21600
+AUTO_REFRESH=true
+PAGE_TIMEOUT_MS=60000
+PLAY_WAIT_MS=15000
+DATA_DIR=/app/data
 ```
+Ne définissez pas `PORT`. Railway le fournit.
 
-## Adresses
-- Catalogue : `/`
-- Tous les diagnostics : `/health`
-- Diagnostic ciblé : `/health/<slug>`
-- Flux RSS : `/feed/<slug>`
-- Rafraîchissement forcé : `/feed/<slug>?refresh=1`
+## Volume Railway requis
+Montez un volume persistant sur `/app/data`. Sans volume, le cache SQLite disparaît à chaque déploiement.
 
-## Capacité recommandée
-Commencer avec 10 à 25 épisodes par émission. Chaque émission possède son propre cache de 30 minutes. Pour 5 émissions à 25 épisodes, prévoir environ 125 ouvertures de pages lors d'un rafraîchissement complet. Éviter de forcer tous les rafraîchissements simultanément.
+## Endpoints
+- `/ready` : healthcheck Railway, aucune extraction
+- `/health` : validation de programs.json
+- `/` : catalogue
+- `/refresh/<slug>` : démarre l'extraction en arrière-plan et répond immédiatement 202
+- `/status/<slug>` : état et nombre d'épisodes en cache
+- `/feed/<slug>` : sert toujours le cache existant; si vide, démarre l'extraction et répond 202
+
+## Déploiement
+1. Copiez les nouveaux fichiers dans le dépôt, sans modifier `programs.json`.
+2. Ajoutez le volume `/app/data`.
+3. Déployez avec l'option Clear build cache.
+4. Testez `/ready`, puis `/health`.
+5. Ouvrez `/refresh/la-journee` une seule fois.
+6. Consultez `/status/la-journee` jusqu'à `ready`.
+7. Ajoutez `/feed/la-journee` dans Pocket Casts.
+
+## Diagnostic audio
+Les images sont explicitement rejetées. Seules les extensions audio, les manifestes HLS, un Content-Type audio, ou une ressource navigateur de type media sont acceptés. Les réponses JSON XHR/fetch sont inspectées récursivement. Les logs indiquent `clicked`, le nombre de `candidates`, l'URL `selected` et sa `source`.
