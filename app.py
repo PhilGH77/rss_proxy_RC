@@ -133,7 +133,7 @@ async def extract_episode(page, url):
 
     await page.goto(
         url,
-        wait_until="networkidle",
+        wait_until="domcontentloaded",
         timeout=3600000
     )
 
@@ -349,7 +349,7 @@ async def scrape_async(p):
     async with async_playwright() as pw:
         browser=await pw.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         ctx=await browser.new_context(locale='fr-CA',user_agent='Mozilla/5.0 (compatible; OHdioRSS/3.0)')
-        page=await ctx.new_page(); await page.goto(p['url'],wait_until='networkidle',timeout=3600000)
+        page=await ctx.new_page(); await page.goto(p['url'],wait_until='domcontentloaded',timeout=3600000)
         hrefs=await page.locator('a[href]').evaluate_all('(els)=>els.map(e=>e.href)')
         ep_re=re.compile(rf"/ohdio/balados/{re.escape(p['id'])}/{re.escape(p['ohdio_slug'])}/\d+/[^?#]+",re.I)
         links=[]
