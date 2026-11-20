@@ -159,265 +159,143 @@ def add_candidate(
     if accepted and media_url not in candidates:
         candidates.append(media_url)
 
-async def handle_response(response):
+async def inspect_response(response):
     try:
-        content_type = response.headers.get(
-            "content-type",
-            ""
-        )
+        response_url = response.url
+        content_type = (
+            response.headers.get("content-type", "")
+            or ""
+        ).lower()
 
+        # Examiner l'URL et son véritable Content-Type
         add_candidate(
-            response.url,
+            response_url,
             content_type,
             "response"
         )
-    except Exception:
-        pass
 
-    async def handle_request(request):
-        try:
-            resource_type = request.resource_type
-
-            if resource_type in [
-                "media",
-                "fetch",
-                "xhr"
-            ]:
-                add_candidate(
-                    request.url,
-                    "",
-                    f"request:{resource_type}"
-                )
-        except Exception:
-            pass
-
-    page.on(
-        "response",
-        lambda response: asyncio.create_task(
-            handle_response(response)
+        # Les services OHdio retournent parfois l'adresse média
+        # à l'intérieur d'une réponse JSON.
+        is_data_response = (
+            "json" in content_type
+            or "javascript" in content_type
+            or "text/plain" in content_type
+            or response.request.resource_type
+            in ["xhr", "fetch"]
         )
-    )
 
-    page.on(
-        "request",
-        lambda req: asyncio.create_task(
-            handle_request(req)
-        )
-    )
+        if not is_data_response:
+            return
 
-    await page.goto(
-        url,
-        wait_until="domcontentloaded",
-        timeout=3600000
-    )
-
-    # Accepter les fenêtres de consentement éventuelles
-    for selector in [
-        'button:has-text("Accepter")',
-        'button:has-text("Tout accepter")',
-        'button:has-text("J’accepte")',
-        'button:has-text("Continuer")'
-    ]:
         try:
-            button = page.locator(selector).first
-
-            if await button.count():
-                await button.click(timeout=3000)
-                await page.wait_for_timeout(1000)
+            response_body = await response.text()
         except Exception:
-            pass
+            return
 
-    # Examiner le HTML et les scripts intégrés
-    body = (
-        await page.content()
-    ).replace("\\u002F", "/").replace("\\/", "/")
+        if not response_body:
+            return
 
-    embedded_patterns = [
-        r'https?://[^"\'\s<>]+\.mp3(?:\?[^"\'\s<>]*)?',
-        r'https?://[^"\'\s<>]+\.m4a(?:\?[^"\'\s<>]*)?',
-        r'https?://[^"\'\s<>]+\.aac(?:\?[^"\'\s<>]*)?',
-        r'https?://[^"\'\s<>]+\.m3u8(?:\?[^"\'\s<>]*)?',
-        r'"(?:url|src|audioUrl|mediaUrl|streamUrl)"\s*:\s*"([^"]+)"'
-    ]
+        decoded_body = (
+            response_body
+            .replace("\\u002F", "/")
+            .replace("\\/", "/")
+            .replace("\\u0026", "&")
+            .replace("&amp;", "&")
+        )
 
-    for pattern in embedded_patterns:
-        for match in re.findall(
-            pattern,
-            body,
+        # Trouver les URL absolues dans la réponse.
+        embedded_urls = re.findall(
+            r'https?://[^"\'\s<>{}\\]+',
+            decoded_body,
             flags=re.I
-        ):
-            value = match if isinstance(match, str) else match[0]
-            add_candidate(value, "", "html")
+        )
 
-    # Cliquer sur les contrôles possibles du lecteur OHdio
-    play_selectors = [
-        'button[aria-label*="écouter" i]',
-        'button[aria-label*="lecture" i]',
-        'button[aria-label*="lancer" i]',
-        'button[title*="écouter" i]',
-        'button:has-text("Lancer l’écoute")',
-        'button:has-text("Écouter")',
-        '[data-testid*="play" i]',
-        '[class*="playButton" i]',
-        '[class*="play-button" i]',
-        'audio'
-    ]
-
-    for selector in play_selectors:
-        try:
-            controls = page.locator(selector)
-            count = min(await controls.count(), 5)
-
-            for index in range(count):
-                try:
-                    await controls.nth(index).scroll_into_view_if_needed()
-                    await controls.nth(index).click(
-                        timeout=5000,
-                        force=True
-                    )
-                    await page.wait_for_timeout(8000)
-
-                    if candidates:
-                        break
-                except Exception:
-                    continue
-
-            if candidates:
-                break
-
-        except Exception:
-            continue
-
-    # Examiner les ressources chargées par le navigateur
-    try:
-        resources = await page.evaluate("""
-            () => performance.getEntriesByType("resource").map(entry => ({
-                name: entry.name,
-                initiatorType: entry.initiatorType
-            }))
-        """)
-
-        for resource in resources:
+        for embedded_url in embedded_urls:
             add_candidate(
-                resource.get("name"),
+                embedded_url,
                 "",
-                "performance:" +
-                resource.get("initiatorType", "")
+                "response-body"
             )
-    except Exception:
-        pass
 
-    # Vérifier les éléments audio/vidéo du DOM
-    try:
-        media_sources = await page.evaluate("""
-            () => {
-                const values = [];
-
-                document.querySelectorAll(
-                    "audio, video, sourcece"
-                ).forEach(element => {
-                    if (element.src) {
-                        valuesush(element.src);
-                    }
-
-                    if (element.currentSrc) {
-                        values.push(element.currentSrc);
-                    }
-                });
-
-                return values;
-            }
-        """)
-
-        for source in media_sources:
-            add_candidate(source, "", "dom-media")
-    except Exception:
-        pass
-
-    title = clean(
-        await page.locator("h1").first.inner_text()
-    ) if await page.locator("h1").count() else clean(
-        await page.title()
-    )
-
-    description = ""
-
-    for selector in [
-        'meta[name="description"]',
-        'meta[property="og:description"]'
-    ]:
+        # Chercher également les champs JSON courants.
         try:
-            description = (
-                await page.locator(selector).get_attribute(
-                    "content"
-                )
-                or ""
-            )
+            payload = json.loads(response_body)
 
-            if description:
-                break
-        except Exception:
+            def walk_json(value, path="root"):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        walk_json(
+                            child,
+                            f"{path}.{key}"
+                        )
+
+                elif isinstance(value, list):
+                    for index, child in enumerate(value):
+                        walk_json(
+                            child,
+                            f"{path}[{index}]"
+                        )
+
+                elif isinstance(value, str):
+                    decoded_value = (
+                        value
+                        .replace("\\u002F", "/")
+                        .replace("\\/", "/")
+                        .replace("\\u0026", "&")
+                    )
+
+                    if decoded_value.startswith(
+                        ("http://", "https://")
+                    ):
+                        add_candidate(
+                            decoded_value,
+                            "",
+                            f"json:{path}"
+                        )
+
+            walk_json(payload)
+
+        except (json.JSONDecodeError, TypeError):
             pass
 
-    visible_text = await page.locator("body").inner_text()
-
-    date_match = re.search(
-        r"\d{1,2}\s+"
-        r"(?:janvier|février|mars|avril|mai|juin|"
-        r"juillet|août|septembre|octobre|novembre|"
-        r"décembre)\s+\d{4}",
-        visible_text,
-        re.I
-    )
-
-    # Préférer un fichier audio direct, sinon un manifeste HLS
-    audio = next(
-        (
-            candidate
-            for candidate in candidates
-            if re.search(
-                r"\.(mp3|m4a|aac)(?:\?|$)",
-                candidate,
-                re.I
-            )
-        ),
-        ""
-    )
-
-    if not audio:
-        audio = next(
-            (
-                candidate
-                for candidate in candidates
-                if ".m3u8" in candidate.lower()
-            ),
-            ""
+    except Exception as error:
+        APP.logger.debug(
+            "Impossible d’examiner la réponse %s: %s",
+            response.url,
+            error
         )
 
-    if not audio and candidates:
-        audio = candidates[0]
 
-    if not audio:
-        APP.logger.warning(
-            "Aucun audio pour %s. Requêtes examinées: %s",
-            url,
-            json.dumps(
-                diagnostics[-30:],
-                ensure_ascii=False
+async def inspect_request(req):
+    try:
+        if req.resource_type in [
+            "media",
+            "xhr",
+            "fetch"
+        \]:
+            add_candidate(
+                req.url,
+                "",
+                f"request:{req.resource_type}"
             )
-        )
+    except Exception:
+        pass
 
-    return {
-        "url": url,
-        "title": title,
-        "description": clean(description),
-        "date": (
-            date_match.group(0)
-            if date_match
-            else ""
-        ),
-        "audio": audio
-    }
+
+def schedule_response(response):
+    asyncio.create_task(
+        inspect_response(response)
+    )
+
+
+def schedule_request(req):
+    asyncio.create_task(
+        inspect_request(req)
+    )
+
+
+page.on("response", schedule_response)
+page.on("request", schedule_request)
 
 async def scrape_async(p):
     async with async_playwright() as pw:
