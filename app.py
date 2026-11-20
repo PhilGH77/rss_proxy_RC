@@ -5,10 +5,11 @@ from flask import Flask, Response, jsonify, request
 from playwright.async_api import async_playwright
 
 APP = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_EPISODES = int(os.getenv('MAX_EPISODES', '25'))
 CACHE_SECONDS = int(os.getenv('CACHE_SECONDS', '1800'))
 PUBLIC_URL = os.getenv('PUBLIC_URL', '').rstrip('/')
-PROGRAMS_FILE = os.getenv('PROGRAMS_FILE', 'programs.json')
+PROGRAMS_FILE = os.getenv('PROGRAMS_FILE', os.path.join(BASE_DIR, 'programs.json'))
 CACHE, LOCKS = {}, {}
 GUARD = threading.Lock()
 AUDIO_RE = re.compile(r'https?://[^\"\'\\\s<>]+(?:\.mp3|\.m4a|\.aac|\.m3u8)(?:\?[^\"\'\\\s<>]*)?', re.I)
@@ -18,7 +19,18 @@ def esc(v): return html.escape(str(v or ''), quote=True)
 def clean(v): return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', v or '')).strip()
 
 def programs():
-    with open(PROGRAMS_FILE, encoding='utf-8') as f: data=json.load(f)
+    try:
+        with open(PROGRAMS_FILE, encoding='utf-8') as f:
+            data=json.load(f)
+    except FileNotFoundError:
+        data=[{
+            'slug':'la-journee',
+            'title':'La journée (est encore jeune)',
+            'url':'https://ici.radio-canada.ca/ohdio/balados/9887/la-journee-est-encore-jeune',
+            'description':'Flux RSS personnel généré depuis OHdio.'
+        }]
+    if not isinstance(data, list):
+        raise ValueError('programs.json doit contenir une liste JSON')
     output={}
     for p in data:
         slug=p['slug'].strip().lower()
@@ -102,6 +114,12 @@ def make_rss(p,data):
         typ='application/vnd.apple.mpegurl' if '.m3u8' in e['audio'].lower() else 'audio/mpeg'
         items.append(f'<item><title>{esc(e["title"])}</title><link>{esc(e["url"])}</link><guid isPermaLink="false">{esc(e["url"])}</guid><pubDate>{parse_date(e["date"])}</pubDate><description>{esc(e["description"])}</description><enclosure url="{esc(e["audio"])}" length="0" type="{typ}"/></item>')
     return f'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>{esc(p["title"])}</title><link>{esc(p["url"])}</link><description>{esc(p.get("description","Flux RSS généré depuis OHdio."))}</description><language>fr-ca</language><itunes:author>Radio-Canada</itunes:author><itunes:explicit>false</itunes:explicit><atom:link href="{esc(self_url)}" rel="self" type="application/rss+xml"/>{"".join(items)}</channel></rss>'
+
+
+@APP.errorhandler(Exception)
+def unhandled_error(error):
+    APP.logger.exception('Erreur non gérée')
+    return jsonify(status='error', type=type(error).__name__, error=str(error)), 500
 
 @APP.get('/')
 def index():

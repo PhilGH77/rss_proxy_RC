@@ -1,8 +1,8 @@
 FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py programs.json ./
-ENV PORT=8080 MAX_EPISODES=25 CACHE_SECONDS=1800 PROGRAMS_FILE=programs.json
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY app.py programs.json /app/
+ENV PORT=8080 MAX_EPISODES=10 CACHE_SECONDS=3600 PROGRAMS_FILE=/app/programs.json PYTHONUNBUFFERED=1
 EXPOSE 8080
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 900 app:APP"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 2 --timeout 900 --access-logfile - --error-logfile - app:APP"]
