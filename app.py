@@ -46,39 +46,310 @@ def parse_date(text):
     except: return format_datetime(datetime.now(timezone.utc))
 
 async def extract_episode(page, url):
-    found=[]
-    def on_response(resp):
-        u=resp.url; c=(resp.headers.get('content-type') or '').lower()
-        if re.search(r'\.(mp3|m4a|aac|m3u8)(\?|$)',u,re.I) or c.startswith('audio/') or 'mpegurl' in c: found.append(u)
-    page.on('response',on_response)
-    await page.goto(url,wait_until='domcontentloaded',timeout=60000)
-    body=(await page.content()).replace('\\u002F','/').replace('\\/','/')
-    found += AUDIO_RE.findall(body)
-    if not found:
-        for sel in ['button:has-text("Lancer l’écoute")','button:has-text("Écouter")','[aria-label*="écoute" i]','audio']:
-            try:
-                el=page.locator(sel).first
-                if await el.count():
-                    await el.click(timeout=3000); await page.wait_for_timeout(5000)
-                    if found: break
-            except: pass
-    title=clean(await page.locator('h1').first.inner_text()) if await page.locator('h1').count() else clean(await page.title())
-    desc=''
-    for sel in ['meta[name="description"]','meta[property="og:description"]']:
+    candidates = []
+    diagnostics = []
+
+    def add_candidate(audio_url, content_type="", source="network"):
+        if not audio_url:
+            return
+
+        audio_url = audio_url.replace("\\u002F", "/")
+        audio_url = audio_url.replace("\\/", "/")
+        content_type = (content_type or "").lower()
+
+        is_audio = (
+            content_type.startswith("audio/")
+            or "mpegurl" in content_type
+            or "application/vnd.apple.mpegurl" in content_type
+            or "application/x-mpegurl" in content_type
+            or re.search(
+                r"\.(mp3|m4a|aac|m3u8|mp4)(?:\?|$)",
+                audio_url,
+                re.I
+            )
+            or any(
+                marker in audio_url.lower()
+                for marker in [
+                    "/media/",
+                    "/audio/",
+                    "/stream/",
+                    "manifest",
+                    "playlist",
+                    "master.m3u8"
+                ]
+            )
+        )
+
+        diagnostics.append({
+            "url": audio_url,
+            "contentType": content_type,
+            "source": source,
+            "accepted": bool(is_audio)
+        })
+
+        if is_audio and audio_url not in candidates:
+            candidates.append(audio_url)
+
+    async def handle_response(response):
         try:
-            desc=await page.locator(sel).get_attribute('content') or ''
-            if desc: break
-        except: pass
-    text=await page.locator('body').inner_text()
-    dm=re.search(r'\d{1,2}\s+(?:janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+\d{4}',text,re.I)
-    audio=next((u for u in found if re.search(r'\.(mp3|m4a|aac)(\?|$)',u,re.I)),found[0] if found else '')
-    return {'url':url,'title':title,'description':clean(desc),'date':dm.group(0) if dm else '', 'audio':audio}
+            add_candidate(
+                response.url,
+                response.headers.get("content-type", ""),
+                "response"
+            )
+        except Exception:
+            pass
+
+    async def handle_request(request):
+        try:
+            resource_type = request.resource_type
+
+            if resource_type in [
+                "media",
+                "fetch",
+                "xhr"
+            ]:
+                add_candidate(
+                    request.url,
+                    "",
+                    f"request:{resource_type}"
+                )
+        except Exception:
+            pass
+
+    page.on(
+        "response",
+        lambda response: asyncio.create_task(
+            handle_response(response)
+        )
+    )
+
+    page.on(
+        "request",
+        lambda req: asyncio.create_task(
+            handle_request(req)
+        )
+    )
+
+    await page.goto(
+        url,
+        wait_until="networkidle",
+        timeout=90000
+    )
+
+    # Accepter les fenêtres de consentement éventuelles
+    for selector in [
+        'button:has-text("Accepter")',
+        'button:has-text("Tout accepter")',
+        'button:has-text("J’accepte")',
+        'button:has-text("Continuer")'
+    ]:
+        try:
+            button = page.locator(selector).first
+
+            if await button.count():
+                await button.click(timeout=3000)
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+    # Examiner le HTML et les scripts intégrés
+    body = (
+        await page.content()
+    ).replace("\\u002F", "/").replace("\\/", "/")
+
+    embedded_patterns = [
+        r'https?://[^"\'\s<>]+\.mp3(?:\?[^"\'\s<>]*)?',
+        r'https?://[^"\'\s<>]+\.m4a(?:\?[^"\'\s<>]*)?',
+        r'https?://[^"\'\s<>]+\.aac(?:\?[^"\'\s<>]*)?',
+        r'https?://[^"\'\s<>]+\.m3u8(?:\?[^"\'\s<>]*)?',
+        r'"(?:url|src|audioUrl|mediaUrl|streamUrl)"\s*:\s*"([^"]+)"'
+    ]
+
+    for pattern in embedded_patterns:
+        for match in re.findall(
+            pattern,
+            body,
+            flags=re.I
+        ):
+            value = match if isinstance(match, str) else match[0]
+            add_candidate(value, "", "html")
+
+    # Cliquer sur les contrôles possibles du lecteur OHdio
+    play_selectors = [
+        'button[aria-label*="écouter" i]',
+        'button[aria-label*="lecture" i]',
+        'button[aria-label*="lancer" i]',
+        'button[title*="écouter" i]',
+        'button:has-text("Lancer l’écoute")',
+        'button:has-text("Écouter")',
+        '[data-testid*="play" i]',
+        '[class*="playButton" i]',
+        '[class*="play-button" i]',
+        'audio'
+    ]
+
+    for selector in play_selectors:
+        try:
+            controls = page.locator(selector)
+            count = min(await controls.count(), 5)
+
+            for index in range(count):
+                try:
+                    await controls.nth(index).scroll_into_view_if_needed()
+                    await controls.nth(index).click(
+                        timeout=5000,
+                        force=True
+                    )
+                    await page.wait_for_timeout(8000)
+
+                    if candidates:
+                        break
+                except Exception:
+                    continue
+
+            if candidates:
+                break
+
+        except Exception:
+            continue
+
+    # Examiner les ressources chargées par le navigateur
+    try:
+        resources = await page.evaluate("""
+            () => performance.getEntriesByType("resource").map(entry => ({
+                name: entry.name,
+                initiatorType: entry.initiatorType
+            }))
+        """)
+
+        for resource in resources:
+            add_candidate(
+                resource.get("name"),
+                "",
+                "performance:" +
+                resource.get("initiatorType", "")
+            )
+    except Exception:
+        pass
+
+    # Vérifier les éléments audio/vidéo du DOM
+    try:
+        media_sources = await page.evaluate("""
+            () => {
+                const values = [];
+
+                document.querySelectorAll(
+                    "audio, video, sourcece"
+                ).forEach(element => {
+                    if (element.src) {
+                        valuesush(element.src);
+                    }
+
+                    if (element.currentSrc) {
+                        values.push(element.currentSrc);
+                    }
+                });
+
+                return values;
+            }
+        """)
+
+        for source in media_sources:
+            add_candidate(source, "", "dom-media")
+    except Exception:
+        pass
+
+    title = clean(
+        await page.locator("h1").first.inner_text()
+    ) if await page.locator("h1").count() else clean(
+        await page.title()
+    )
+
+    description = ""
+
+    for selector in [
+        'meta[name="description"]',
+        'meta[property="og:description"]'
+    ]:
+        try:
+            description = (
+                await page.locator(selector).get_attribute(
+                    "content"
+                )
+                or ""
+            )
+
+            if description:
+                break
+        except Exception:
+            pass
+
+    visible_text = await page.locator("body").inner_text()
+
+    date_match = re.search(
+        r"\d{1,2}\s+"
+        r"(?:janvier|février|mars|avril|mai|juin|"
+        r"juillet|août|septembre|octobre|novembre|"
+        r"décembre)\s+\d{4}",
+        visible_text,
+        re.I
+    )
+
+    # Préférer un fichier audio direct, sinon un manifeste HLS
+    audio = next(
+        (
+            candidate
+            for candidate in candidates
+            if re.search(
+                r"\.(mp3|m4a|aac)(?:\?|$)",
+                candidate,
+                re.I
+            )
+        ),
+        ""
+    )
+
+    if not audio:
+        audio = next(
+            (
+                candidate
+                for candidate in candidates
+                if ".m3u8" in candidate.lower()
+            ),
+            ""
+        )
+
+    if not audio and candidates:
+        audio = candidates[0]
+
+    if not audio:
+        APP.logger.warning(
+            "Aucun audio pour %s. Requêtes examinées: %s",
+            url,
+            json.dumps(
+                diagnostics[-30:],
+                ensure_ascii=False
+            )
+        )
+
+    return {
+        "url": url,
+        "title": title,
+        "description": clean(description),
+        "date": (
+            date_match.group(0)
+            if date_match
+            else ""
+        ),
+        "audio": audio
+    }
 
 async def scrape_async(p):
     async with async_playwright() as pw:
         browser=await pw.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         ctx=await browser.new_context(locale='fr-CA',user_agent='Mozilla/5.0 (compatible; OHdioRSS/3.0)')
-        page=await ctx.new_page(); await page.goto(p['url'],wait_until='domcontentloaded',timeout=60000)
+        page=await ctx.new_page(); await page.goto(p['url'],wait_until='networkidle',timeout=90000)
         hrefs=await page.locator('a[href]').evaluate_all('(els)=>els.map(e=>e.href)')
         ep_re=re.compile(rf"/ohdio/balados/{re.escape(p['id'])}/{re.escape(p['ohdio_slug'])}/\d+/[^?#]+",re.I)
         links=[]
